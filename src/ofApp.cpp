@@ -34,6 +34,106 @@ public:
 	uint32_t _y = 2463534242;
 };
 
+
+/*x = 0~1*/
+inline int float_to_index(float x, int indexCount) {
+	int index = (int)(x * indexCount);
+	index = std::max(index, 0);
+	index = std::min(index, indexCount - 1);
+	return index;
+}
+inline std::vector<int> random_index_samples(int sampleCount, int indexCount, int seed) {
+	seed = std::max(1, seed);
+	Xor random(seed);
+
+	std::vector<int> r;
+	r.resize(sampleCount);
+	for (int i = 0; i < sampleCount; ++i) {
+		r[i] = random.generate() % indexCount; // has modulo bias
+	}
+	return r;
+}
+inline std::vector<int> quasi_random_index_samples(int sampleCount, int indexCount, int seed) {
+	seed = std::max(1, seed);
+	Xor random(seed);
+
+	Halton_sampler sampler;
+	sampler.init_random(std::mt19937(seed));
+
+	std::vector<int> r;
+	r.resize(sampleCount);
+	for (int i = 0; i < sampleCount; ++i) {
+		r[i] = float_to_index(sampler.sample(2, i), indexCount);
+	}
+	return r;
+}
+
+class Kahan {
+public:
+	Kahan() {}
+	Kahan(double value) {}
+
+	void add(double x) {
+		double y = x - _c;
+		double t = _sum + y;
+		_c = (t - _sum) - y;
+		_sum = t;
+	}
+	void operator=(double x) {
+		_sum = x;
+		_c = 0.0;
+	}
+	void operator+=(double x) {
+		add(x);
+	}
+	operator double() const {
+		return _sum;
+	}
+private:
+	double _sum = 0.0;
+	double _c = 0.0;
+};
+
+// https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Online_algorithm
+class IncrementalStatatics {
+public:
+	void addSample(double x) {
+		_n++;
+		double delta = x - _mean;
+		_mean += delta / _n;
+		double delta2 = x - _mean;
+		_M2 += delta * delta2;
+	}
+	double variance() const {
+		// return _M2 / (_n - 1);
+		return _M2 / _n;
+	}
+	double avarage() const {
+		return _mean;
+	}
+
+	IncrementalStatatics merge(const IncrementalStatatics &rhs) const {
+		IncrementalStatatics r;
+
+		double ma = _mean;
+		double mb = rhs._mean;
+		double N = _n;
+		double M = rhs._n;
+		double N_M = N + M;
+		double a = N / N_M;
+		double b = M / N_M;
+		r._mean = a * ma + b * mb;
+		r._M2 = _M2 + rhs._M2;
+		r._n = N_M;
+
+		return r;
+	}
+private:
+	Kahan _mean = 0.0;
+	Kahan _M2 = 0.0;
+	int _n = 0;
+};
+
 //--------------------------------------------------------------
 void ofApp::setup(){
 	_imgui.setup();
@@ -43,6 +143,38 @@ void ofApp::setup(){
 	_camera.setDistance(5.0f);
 
 	_sampler.init_random(std::mt19937(_seed));
+
+	const int indexCount = 10000;
+	auto samples_1 = random_index_samples(100000, indexCount, _seed);
+	auto samples_2 = quasi_random_index_samples(100000, indexCount, _seed);
+
+	{
+		IncrementalStatatics st;
+		int number_of_sample[indexCount] = {};
+		for (int i = 0; i < samples_1.size(); ++i) {
+			number_of_sample[samples_1[i]]++;
+		}
+		for (int i = 0; i < indexCount; ++i) {
+			st.addSample(number_of_sample[i]);
+		}
+		printf("random\n");
+		printf("avg     : %.4f\n", st.avarage());
+		printf("variance: %.4f\n", st.variance());
+	}
+	
+	{
+		IncrementalStatatics st;
+		int number_of_sample[indexCount] = {};
+		for (int i = 0; i < samples_2.size(); ++i) {
+			number_of_sample[samples_2[i]]++;
+		}
+		for (int i = 0; i < indexCount; ++i) {
+			st.addSample(number_of_sample[i]);
+		}
+		printf("quasi-random\n");
+		printf("avg     : %.4f\n", st.avarage());
+		printf("variance: %.4f\n", st.variance());
+	}
 }
 
 //--------------------------------------------------------------
